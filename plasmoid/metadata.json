@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "org.local.chargefullonce",
+        "Name": "Charge to 100% Once",
+        "Description": "One click: charge to 100% this time, then go back to your normal limits",
+        "Icon": "battery-100-charging",
+        "Authors": [{ "Name": "Your Name" }],
+        "Category": "System Information",
+        "License": "MIT",
+        "Version": "1.2"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "Plasma/Applet"
+}

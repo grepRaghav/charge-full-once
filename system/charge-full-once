@@ -1,0 +1,93 @@
+#!/bin/bash
+# charge-full-once: temporarily lift battery charge limits for one charge.
+# Usage: charge-full-once start|cancel|status|watch
+set -u
+DIR=/var/lib/charge-full-once
+STATE=$DIR/state
+PS=/sys/class/power_supply
+
+find_bat() {
+  local b
+  for b in "$PS"/BAT*; do
+    [ -e "$b/charge_control_end_threshold" ] && { echo "$b"; return 0; }
+  done
+  return 1
+}
+
+cmd_start() {
+  local bat start="" end st
+  bat=$(find_bat) || { echo "No battery with charge threshold support" >&2; exit 1; }
+  st=$(cat "$bat/status" 2>/dev/null || echo Unknown)
+  if [ "$st" = "Discharging" ]; then
+    echo "Charger is not plugged in" >&2
+    exit 1
+  fi
+  mkdir -p "$DIR"
+  if [ ! -f "$STATE" ]; then
+    end=$(cat "$bat/charge_control_end_threshold")
+    [ -e "$bat/charge_control_start_threshold" ] && start=$(cat "$bat/charge_control_start_threshold")
+    printf '%s\n%s\n%s\n' "$bat" "$start" "$end" > "$STATE"
+    chmod 644 "$STATE"
+  fi
+  # raise end first, then start (keeps start < end at every step)
+  echo 100 > "$bat/charge_control_end_threshold" 2>/dev/null
+  if [ "$(cat "$bat/charge_control_end_threshold")" != "100" ]; then
+    echo "Could not write charge_control_end_threshold" >&2
+    rm -f "$STATE"
+    exit 1
+  fi
+  [ -e "$bat/charge_control_start_threshold" ] && echo 99 > "$bat/charge_control_start_threshold" 2>/dev/null
+  systemctl restart --no-block charge-full-once.service
+  echo "ok"
+}
+
+cmd_cancel() {
+  [ -f "$STATE" ] || exit 0
+  local bat start end
+  { read -r bat; read -r start; read -r end; } < "$STATE"
+  # restore start first, then end (keeps start < end at every step)
+  if [ -n "$start" ] && [ -e "$bat/charge_control_start_threshold" ]; then
+    echo "$start" > "$bat/charge_control_start_threshold" 2>/dev/null
+  fi
+  echo "$end" > "$bat/charge_control_end_threshold" 2>/dev/null
+  rm -f "$STATE"
+  echo "ok"
+}
+
+cmd_watch() {
+  [ -f "$STATE" ] || exit 0
+  local bat cap st stopped=0
+  read -r bat < "$STATE"
+  sleep 10   # let charging actually begin before judging
+  while [ -f "$STATE" ]; do
+    cap=$(cat "$bat/capacity" 2>/dev/null || echo 0)
+    st=$(cat "$bat/status" 2>/dev/null || echo Unknown)
+    if [ "$cap" -ge 100 ] || [ "$st" = "Full" ] || [ "$st" = "Discharging" ] \
+       || { [ "$st" = "Not charging" ] && [ "$cap" -ge 97 ]; }; then
+      stopped=$((stopped + 1))
+    else
+      stopped=0
+    fi
+    # require 3 consecutive "stopped" readings (~15s) to ignore brief flickers
+    [ "$stopped" -ge 3 ] && break
+    sleep 5
+  done
+  cmd_cancel >/dev/null
+}
+
+cmd_status() {
+  local bat cap end start
+  bat=$(find_bat) || { echo "unsupported 0 - -"; exit 0; }
+  cap=$(cat "$bat/capacity" 2>/dev/null || echo 0)
+  end=$(cat "$bat/charge_control_end_threshold" 2>/dev/null || echo -)
+  start=$(cat "$bat/charge_control_start_threshold" 2>/dev/null || echo -)
+  if [ -f "$STATE" ]; then echo "active $cap $end $start"; else echo "idle $cap $end $start"; fi
+}
+
+case "${1:-}" in
+  start)  cmd_start ;;
+  cancel) cmd_cancel ;;
+  watch)  cmd_watch ;;
+  status) cmd_status ;;
+  *) echo "Usage: $0 start|cancel|status|watch" >&2; exit 2 ;;
+esac

@@ -1,0 +1,10 @@
+[Unit]
+Description=Restore battery charge limits after a one-time full charge
+ConditionPathExists=/var/lib/charge-full-once/state
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/charge-full-once watch
+
+[Install]
+WantedBy=multi-user.target
